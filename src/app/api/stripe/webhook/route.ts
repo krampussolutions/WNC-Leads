@@ -1,94 +1,83 @@
 import { NextResponse } from "next/server";
-import { headers } from "next/headers";
 import Stripe from "stripe";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function getStripe() {
-  const key = process.env.STRIPE_SECRET_KEY!;
-  return new Stripe(key, { apiVersion: "2024-06-20" });
-}
-
 export async function POST(req: Request) {
-  const stripe = getStripe();
-  const sig = (await headers()).get("stripe-signature");
-  const whsec = process.env.STRIPE_WEBHOOK_SECRET;
+  const secretKey = process.env.STRIPE_SECRET_KEY;
+  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
-  if (!sig || !whsec) {
-    return NextResponse.json({ error: "Missing stripe-signature or STRIPE_WEBHOOK_SECRET" }, { status: 400 });
-  }
+  if (!secretKey) return NextResponse.json({ error: "Missing STRIPE_SECRET_KEY" }, { status: 500 });
+  if (!webhookSecret) return NextResponse.json({ error: "Missing STRIPE_WEBHOOK_SECRET" }, { status: 500 });
 
-  const body = await req.text();
+  const stripe = new Stripe(secretKey, { apiVersion: "2024-06-20" });
+
+  const rawBody = await req.text();
+  const sig = req.headers.get("stripe-signature");
+
+  if (!sig) return NextResponse.json({ error: "Missing stripe-signature" }, { status: 400 });
 
   let event: Stripe.Event;
   try {
-    event = stripe.webhooks.constructEvent(body, sig, whsec);
+    event = stripe.webhooks.constructEvent(rawBody, sig, webhookSecret);
   } catch (err: any) {
-    return NextResponse.json({ error: `Webhook signature verification failed: ${err.message}` }, { status: 400 });
+    return NextResponse.json({ error: `Webhook signature verification failed: ${err?.message ?? "unknown"}` }, { status: 400 });
   }
 
   try {
     switch (event.type) {
+      // When Checkout completes, ensure we link the Stripe customer to the profile.
       case "checkout.session.completed": {
         const session = event.data.object as Stripe.Checkout.Session;
-        const userId = session.metadata?.supabase_user_id;
-        const subscriptionId = session.subscription as string | null;
-        const customerId = session.customer as string | null;
 
-        if (userId) {
+        const customerId =
+          typeof session.customer === "string" ? session.customer : session.customer?.id;
+
+        const userId = (session.metadata?.user_id as string) || null;
+
+        // Only proceed if we have both
+        if (customerId && userId) {
           await supabaseAdmin
             .from("profiles")
             .update({
               stripe_customer_id: customerId,
-              stripe_subscription_id: subscriptionId,
-              subscription_status: subscriptionId ? "active" : "inactive",
+              subscription_status: "active",
             })
             .eq("id", userId);
         }
         break;
       }
 
-      case "customer.subscription.created":
       case "customer.subscription.updated":
       case "customer.subscription.deleted": {
         const sub = event.data.object as Stripe.Subscription;
-        const customerId = sub.customer as string;
-        const status = sub.status; // active, trialing, past_due, canceled, unpaid, incomplete...
-        const currentPeriodEnd = sub.current_period_end ? new Date(sub.current_period_end * 1000).toISOString() : null;
 
-        // Find user by stripe_customer_id
-        const { data: profile } = await supabaseAdmin
+        const customerId =
+          typeof sub.customer === "string" ? sub.customer : sub.customer?.id;
+
+        if (!customerId) break;
+
+        const status =
+          event.type === "customer.subscription.deleted"
+            ? "canceled"
+            : (sub.status as string);
+
+        await supabaseAdmin
           .from("profiles")
-          .select("id")
-          .eq("stripe_customer_id", customerId)
-          .maybeSingle();
+          .update({ subscription_status: status })
+          .eq("stripe_customer_id", customerId);
 
-        if (profile?.id) {
-          await supabaseAdmin
-            .from("profiles")
-            .update({
-              stripe_subscription_id: sub.id,
-              subscription_status: status,
-              current_period_end: currentPeriodEnd,
-            })
-            .eq("id", profile.id);
-        }
         break;
       }
 
       default:
         break;
-    });
     }
-  }
-}
-
-
 
     return NextResponse.json({ received: true });
-  } catch (e: any) {
-    return NextResponse.json({ error: e?.message ?? "Webhook handler error" }, { status: 500 });
+  } catch (err: any) {
+    return NextResponse.json({ error: err?.message ?? "Webhook handler error" }, { status: 500 });
   }
 }
