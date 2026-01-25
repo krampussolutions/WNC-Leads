@@ -1,3 +1,4 @@
+// src/app/api/stripe/checkout/route.ts
 import { NextResponse } from "next/server";
 import { getStripe } from "@/lib/stripe";
 import { createSupabaseServer } from "@/lib/supabase/server";
@@ -8,32 +9,37 @@ export const dynamic = "force-dynamic";
 
 export async function POST(req: Request) {
   try {
-    // 1) Read env safely (no "!" crashes)
+    // Env
     const baseUrl = process.env.NEXT_PUBLIC_SITE_URL;
     const priceId =
-      process.env.STRIPE_PRICE_ID || process.env.STRIPE_PRICE_SUBSCRIPTION;
-
-    if (!priceId) {
-      return NextResponse.json(
-        { error: "Missing STRIPE_PRICE_ID (or STRIPE_PRICE_SUBSCRIPTION)" },
-        { status: 500 }
-      );
-    }
+      process.env.STRIPE_PRICE_ID ||
+      process.env.STRIPE_PRICE_SUBSCRIPTION ||
+      process.env.STRIPE_PRICE_SUBSCRIPTION_ID;
 
     if (
       !baseUrl ||
       (!baseUrl.startsWith("https://") && !baseUrl.startsWith("http://localhost"))
     ) {
       return NextResponse.json(
-        { error: "NEXT_PUBLIC_SITE_URL must be https:// (or localhost for dev)" },
+        { error: "NEXT_PUBLIC_SITE_URL must start with https:// (or http://localhost for dev)" },
         { status: 500 }
       );
     }
 
-    // 2) Stripe client (this can throw if STRIPE_SECRET_KEY is wrong/missing)
+    if (!priceId) {
+      return NextResponse.json(
+        {
+          error:
+            "Missing Stripe price env. Set one of: STRIPE_PRICE_ID or STRIPE_PRICE_SUBSCRIPTION or STRIPE_PRICE_SUBSCRIPTION_ID",
+        },
+        { status: 500 }
+      );
+    }
+
+    // Stripe client (will throw if STRIPE_SECRET_KEY missing/invalid)
     const stripe = getStripe();
 
-    // 3) Require authenticated user (POST comes from /pricing)
+    // Must be logged in
     const supabase = await createSupabaseServer();
     const { data: auth, error: authErr } = await supabase.auth.getUser();
 
@@ -43,15 +49,12 @@ export async function POST(req: Request) {
     }
 
     if (!auth?.user) {
-      return NextResponse.json(
-        { error: "Not authenticated. Please log in first." },
-        { status: 401 }
-      );
+      return NextResponse.redirect(new URL("/login", req.url), { status: 303 });
     }
 
     const userId = auth.user.id;
 
-    // 4) Ensure profile exists
+    // Load profile (server-side, trusted)
     const { data: profile, error: profileErr } = await supabaseAdmin
       .from("profiles")
       .select("id,email,stripe_customer_id")
@@ -65,12 +68,12 @@ export async function POST(req: Request) {
 
     if (!profile?.email) {
       return NextResponse.json(
-        { error: "Profile not found or missing email. Run migration + sign up again." },
+        { error: "Profile missing. Ensure profiles table trigger/migration exists, then sign up again." },
         { status: 500 }
       );
     }
 
-    // 5) Create Stripe customer if missing
+    // Create customer if missing
     let customerId = (profile.stripe_customer_id as string | null) ?? null;
 
     if (!customerId) {
@@ -87,12 +90,23 @@ export async function POST(req: Request) {
         .eq("id", userId);
 
       if (updErr) {
-        console.error("profiles update error:", updErr);
+        console.error("profiles update stripe_customer_id error:", updErr);
         return NextResponse.json({ error: updErr.message }, { status: 500 });
       }
     }
 
-    // 6) Create Checkout session
+    // Optional: mark pending so UI can show "processing" until webhook flips to active
+    // (safe if column exists; remove if you don't want it)
+    try {
+      await supabaseAdmin
+        .from("profiles")
+        .update({ subscription_status: "pending" })
+        .eq("id", userId);
+    } catch {
+      // ignore if column/enum blocks it
+    }
+
+    // Create Checkout session
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
       customer: customerId,
@@ -100,18 +114,21 @@ export async function POST(req: Request) {
       allow_promotion_codes: true,
       success_url: `${baseUrl}/dashboard?checkout=success`,
       cancel_url: `${baseUrl}/pricing?checkout=cancel`,
-      subscription_data: { metadata: { supabase_user_id: userId } },
+      // IMPORTANT: webhook will read this
+      subscription_data: {
+        metadata: { supabase_user_id: userId },
+      },
       metadata: { supabase_user_id: userId },
     });
 
     if (!session.url) {
       return NextResponse.json(
-        { error: "Stripe session created but missing session.url" },
+        { error: "Stripe session created but session.url is missing" },
         { status: 500 }
       );
     }
 
-    // Return URL for fetch-based flows OR redirect for form POST
+    // Redirect browser to Stripe
     return NextResponse.redirect(session.url, { status: 303 });
   } catch (e: any) {
     console.error("Checkout route fatal error:", e);
