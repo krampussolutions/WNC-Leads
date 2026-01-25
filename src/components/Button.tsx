@@ -1,28 +1,33 @@
-import { cn } from "@/lib/cn";
+import * as React from "react";
+
+type Variant = "primary" | "secondary" | "danger" | "ghost";
+
+type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
+  variant?: Variant;
+};
 
 export function Button({
-  children,
-  className,
+  className = "",
   variant = "primary",
-  type = "button",
-  disabled,
-}: {
-  children: React.ReactNode;
-  className?: string;
-  variant?: "primary" | "secondary" | "danger" | "ghost";
-  type?: "button" | "submit" | "reset";
-  disabled?: boolean;
-}) {
-  const base = "inline-flex items-center justify-center rounded-md px-4 py-2 text-sm font-medium transition disabled:opacity-60 disabled:cursor-not-allowed";
-  const variants: Record<string, string> = {
-    primary: "bg-sky-600 text-white hover:bg-sky-500",
-    secondary: "border border-slate-700 hover:bg-slate-900",
-    danger: "bg-rose-600 text-white hover:bg-rose-500",
-    ghost: "hover:bg-slate-900",
+  type,
+  ...props
+}: ButtonProps) {
+  const base =
+    "inline-flex items-center justify-center rounded-md px-4 py-2 text-sm font-medium transition " +
+    "disabled:opacity-50 disabled:pointer-events-none";
+
+  const styles: Record<Variant, string> = {
+    primary: "bg-emerald-600 text-white hover:bg-emerald-500",
+    secondary: "bg-slate-800 text-white hover:bg-slate-700 border border-slate-700",
+    danger: "bg-red-600 text-white hover:bg-red-500",
+    ghost: "bg-transparent text-white hover:bg-slate-900 border border-slate-800",
   };
+
   return (
-    <button type={type} disabled={disabled} className={cn(base, variants[variant], className)}>
-      {children}
-    </button>
+    <button
+      type={type ?? "button"}   // prevents accidental form submits
+      className={`${base} ${styles[variant]} ${className}`}
+      {...props}               // this includes onClick, disabled, etc.
+    />
   );
 }
