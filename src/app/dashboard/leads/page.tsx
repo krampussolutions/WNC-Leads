@@ -1,3 +1,5 @@
+"use client";
+
 import Nav from "@/components/Nav";
 import { requireUser } from "@/lib/auth";
 import { createSupabaseServer } from "@/lib/supabase/server";
