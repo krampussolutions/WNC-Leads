@@ -7,27 +7,49 @@ import ReviewsSection from "./reviews";
 
 export const dynamic = "force-dynamic";
 
+/**
+ * Normalize the incoming slug so URL encoding, whitespace, or casing
+ * can't cause a false "not found".
+ */
+function normalizeSlug(input: string) {
+  try {
+    return decodeURIComponent(input || "").trim().toLowerCase();
+  } catch {
+    // If decodeURIComponent fails (malformed encoding), fall back safely.
+    return (input || "").trim().toLowerCase();
+  }
+}
+
 async function submitQuote(formData: FormData) {
   "use server";
-  const slug = String(formData.get("slug") || "");
-  const name = String(formData.get("name") || "");
-  const email = String(formData.get("email") || "");
-  const phone = String(formData.get("phone") || "");
-  const message = String(formData.get("message") || "");
+
+  const slugRaw = String(formData.get("slug") || "");
+  const slug = normalizeSlug(slugRaw);
+
+  const name = String(formData.get("name") || "").trim();
+  const email = String(formData.get("email") || "").trim();
+  const phone = String(formData.get("phone") || "").trim();
+  const message = String(formData.get("message") || "").trim();
 
   if (!slug || !name || !email || !message) return;
 
   const supabase = await createSupabaseServer();
-  const { data: listing } = await supabase
+
+  // Find listing by slug; only allow quote requests to published listings
+  const { data: listing, error } = await supabase
     .from("listings")
     .select("id")
     .eq("slug", slug)
     .eq("is_published", true)
     .maybeSingle();
 
+  if (error) {
+    console.error("[submitQuote] listing lookup error:", error);
+    return;
+  }
   if (!listing) return;
 
-  await supabase.from("quote_requests").insert({
+  const { error: insertErr } = await supabase.from("quote_requests").insert({
     listing_id: listing.id,
     requester_name: name,
     requester_email: email,
@@ -35,18 +57,96 @@ async function submitQuote(formData: FormData) {
     message,
   });
 
+  if (insertErr) {
+    console.error("[submitQuote] insert error:", insertErr);
+    return;
+  }
+
   revalidatePath(`/listing/${slug}`);
 }
 
-export default async function ListingPage({ params }: { params: { slug: string } }) {
+export default async function ListingPage({
+  params,
+  searchParams,
+}: {
+  params: { slug: string };
+  searchParams?: Record<string, string | string[] | undefined>;
+}) {
   const supabase = await createSupabaseServer();
-  const { data: listing } = await supabase
+  const slug = normalizeSlug(params.slug);
+
+  // Optional debug mode: /listing/krampus-solutions?debug=1
+  const debug =
+    searchParams?.debug === "1" ||
+    (Array.isArray(searchParams?.debug) && searchParams?.debug.includes("1"));
+
+  // Primary listing query
+  const { data: listing, error } = await supabase
     .from("listings")
     .select("*")
-    .eq("slug", params.slug)
+    .eq("slug", slug)
     .eq("is_published", true)
     .maybeSingle();
 
+  // Dev/server logs are the fastest way to see what's happening
+  console.log("[ListingPage] slug param:", params.slug, "=> normalized:", slug);
+  if (error) console.error("[ListingPage] listing query error:", error);
+
+  // Sanity query (helps detect wrong env vars / wrong project / RLS)
+  // Only run when debug=1 to avoid extra DB reads on every request.
+  let sanity: any[] | null = null;
+  let sanityErr: any = null;
+
+  if (debug) {
+    const s = await supabase
+      .from("listings")
+      .select("slug, business_name, is_published")
+      .limit(5);
+
+    sanity = s.data ?? null;
+    sanityErr = s.error ?? null;
+
+    if (sanityErr) console.error("[ListingPage] sanity error:", sanityErr);
+    console.log("[ListingPage] sanity sample:", sanity);
+  }
+
+  // If Supabase returned an actual error (not "no rows"), show it (debug-safe)
+  if (error) {
+    return (
+      <>
+        <Nav />
+        <main className="mx-auto max-w-4xl px-6 py-12">
+          <Card>
+            <h1 className="text-xl font-semibold">Error loading listing</h1>
+            <p className="mt-2 text-slate-300">
+              The server hit an error when querying Supabase.
+            </p>
+
+            {debug ? (
+              <pre className="mt-4 whitespace-pre-wrap rounded-lg border border-slate-800 bg-slate-950 p-4 text-xs text-slate-200">
+                {JSON.stringify(
+                  {
+                    normalizedSlug: slug,
+                    error,
+                    sanityErr,
+                    sanity,
+                  },
+                  null,
+                  2
+                )}
+              </pre>
+            ) : (
+              <p className="mt-3 text-sm text-slate-400">
+                Add <code>?debug=1</code> to the URL to see diagnostics (admins only).
+              </p>
+            )}
+          </Card>
+        </main>
+      </>
+    );
+  }
+
+  // Not found (either unpublished or missing)
   if (!listing) {
     return (
       <>
@@ -55,6 +155,23 @@ export default async function ListingPage({ params }: { params: { slug: string }
           <Card>
             <h1 className="text-xl font-semibold">Listing not found</h1>
             <p className="mt-2 text-slate-300">This listing may be unpublished or removed.</p>
+
+            {debug ? (
+              <pre className="mt-4 whitespace-pre-wrap rounded-lg border border-slate-800 bg-slate-950 p-4 text-xs text-slate-200">
+                {JSON.stringify(
+                  {
+                    normalizedSlug: slug,
+                    paramsSlug: params.slug,
+                    sanityErr,
+                    sanity,
+                    hint:
+                      "If sanity is empty or errors, your Vercel env vars likely point to the wrong Supabase project or RLS is blocking anon reads.",
+                  },
+                  null,
+                  2
+                )}
+              </pre>
+            ) : null}
           </Card>
         </main>
       </>
@@ -94,7 +211,8 @@ export default async function ListingPage({ params }: { params: { slug: string }
                 </div>
                 <div className="mt-2 text-slate-400">
                   {listing.city}, {listing.state}
-                  {listing.county ? ` · ${listing.county} County` : ""} · {listing.service_area}
+                  {listing.county ? ` · ${listing.county} County` : ""}
+                  {listing.service_area ? ` · ${listing.service_area}` : ""}
                 </div>
               </div>
             </div>
@@ -113,7 +231,7 @@ export default async function ListingPage({ params }: { params: { slug: string }
               {listing.website ? (
                 <div>
                   <span className="text-slate-400">Website:</span>{" "}
-                  <a href={listing.website} target="_blank">
+                  <a href={listing.website} target="_blank" rel="noreferrer">
                     {listing.website}
                   </a>
                 </div>
@@ -124,6 +242,20 @@ export default async function ListingPage({ params }: { params: { slug: string }
                 </div>
               ) : null}
             </div>
+
+            {debug ? (
+              <pre className="mt-6 whitespace-pre-wrap rounded-lg border border-slate-800 bg-slate-950 p-4 text-xs text-slate-200">
+                {JSON.stringify(
+                  {
+                    normalizedSlug: slug,
+                    listingSlug: listing.slug,
+                    is_published: listing.is_published,
+                  },
+                  null,
+                  2
+                )}
+              </pre>
+            ) : null}
           </Card>
 
           <Card>
@@ -134,6 +266,7 @@ export default async function ListingPage({ params }: { params: { slug: string }
 
             <form action={submitQuote} className="mt-6 grid gap-4">
               <input type="hidden" name="slug" value={listing.slug} />
+
               <div className="grid gap-4 md:grid-cols-2">
                 <div>
                   <label className="text-sm text-slate-300">Name</label>
@@ -179,11 +312,10 @@ export default async function ListingPage({ params }: { params: { slug: string }
           </Card>
 
           <Card>
-      <h2 className="text-xl font-semibold">Reviews</h2>
-      <p className="mt-1 text-sm text-slate-300">Reviews are visible after approval.</p>
-
-      <ReviewsSection slug={listing.slug} />
-    </Card>
+            <h2 className="text-xl font-semibold">Reviews</h2>
+            <p className="mt-1 text-sm text-slate-300">Reviews are visible after approval.</p>
+            <ReviewsSection slug={listing.slug} />
+          </Card>
         </div>
       </main>
     </>
