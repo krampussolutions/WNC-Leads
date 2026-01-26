@@ -1,4 +1,3 @@
-// src/app/dashboard/listing/page.tsx
 import Nav from "@/components/Nav";
 import { Card } from "@/components/Card";
 import { requireUser, getProfile } from "@/lib/auth";
@@ -54,20 +53,20 @@ export default async function DashboardListingPage() {
   async function saveListing(formData: FormData) {
     "use server";
 
-    const business_name = String(formData.get("business_name") || "");
-    const category = String(formData.get("category") || "");
-    const city = String(formData.get("city") || "");
-    const county = String(formData.get("county") || "");
-    const state = String(formData.get("state") || "NC");
-    const service_area = String(formData.get("service_area") || "");
-    const account_type = String(formData.get("account_type") || "contractor");
-    const headline = String(formData.get("headline") || "");
-    const description = String(formData.get("description") || "");
-    const phone = String(formData.get("phone") || "");
-    const website = String(formData.get("website") || "");
-    const email_public = String(formData.get("email_public") || "");
-    const logo_url = String(formData.get("logo_url") || "");
-    const cover_url = String(formData.get("cover_url") || "");
+    const business_name = String(formData.get("business_name") || "").trim();
+    const category = String(formData.get("category") || "").trim();
+    const city = String(formData.get("city") || "").trim();
+    const county = String(formData.get("county") || "").trim();
+    const state = String(formData.get("state") || "NC").trim();
+    const service_area = String(formData.get("service_area") || "").trim();
+    const account_type = String(formData.get("account_type") || "contractor").trim();
+    const headline = String(formData.get("headline") || "").trim();
+    const description = String(formData.get("description") || "").trim();
+    const phone = String(formData.get("phone") || "").trim();
+    const website = String(formData.get("website") || "").trim();
+    const email_public = String(formData.get("email_public") || "").trim();
+    const logo_url = String(formData.get("logo_url") || "").trim();
+    const cover_url = String(formData.get("cover_url") || "").trim();
     const publish = String(formData.get("publish") || "") === "on";
 
     const supabase = await createSupabaseServer();
@@ -76,25 +75,21 @@ export default async function DashboardListingPage() {
 
     const owner_id = auth.user.id;
 
-    const { data: p, error: profErr } = await supabase
+    const { data: p } = await supabase
       .from("profiles")
       .select("subscription_status")
       .eq("id", owner_id)
       .maybeSingle();
 
-    if (profErr) {
-      redirect("/dashboard?error=profile");
-    }
-
     const isActive =
       p?.subscription_status === "active" ||
       p?.subscription_status === "trialing";
 
-    const slug = slugify(business_name || "business");
+    const newSlug = slugify(business_name || "business");
 
-    const payload = {
+    const payload: any = {
       owner_id,
-      slug,
+      slug: newSlug,
       business_name,
       category,
       city,
@@ -110,8 +105,13 @@ export default async function DashboardListingPage() {
       logo_url: logo_url || null,
       cover_url: cover_url || null,
       is_published: publish && isActive,
-      updated_at: new Date().toISOString(),
     };
+
+    // If they checked publish but are not active, force unpublished
+    if (publish && !isActive) payload.is_published = false;
+
+    // If slug changed, revalidate the old public path too
+    const oldSlug = (listing?.slug ?? "").trim();
 
     const { data: existing } = await supabase
       .from("listings")
@@ -125,14 +125,15 @@ export default async function DashboardListingPage() {
       await supabase.from("listings").insert(payload);
     }
 
+    // Revalidate pages that show listings
     revalidatePath("/dashboard/listing");
     revalidatePath("/browse");
     revalidatePath("/");
+    revalidatePath(`/listing/${newSlug}`);
+    if (oldSlug && oldSlug !== newSlug) revalidatePath(`/listing/${oldSlug}`);
 
-    // If published, also revalidate the public listing path
-    revalidatePath(`/listing/${slug}`);
-
-    redirect("/dashboard");
+    // Stay on editor (so it doesn't look like it "disappeared")
+    redirect("/dashboard/listing");
   }
 
   return (

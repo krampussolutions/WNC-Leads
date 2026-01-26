@@ -1,3 +1,4 @@
+import "server-only";
 import { redirect } from "next/navigation";
 import { createSupabaseServer } from "@/lib/supabase/server";
 
@@ -11,6 +12,12 @@ export async function requireUser() {
   const user = await getUser();
   if (!user) redirect("/login");
   return user;
+}
+
+export async function requireUserOptional() {
+  const supabase = await createSupabaseServer();
+  const { data } = await supabase.auth.getUser();
+  return data.user ?? null;
 }
 
 export async function getProfile() {
@@ -41,47 +48,25 @@ export async function requireActiveSubscription() {
   return profile;
 }
 
-export async function requireUserOptional() {
-  const supabase = await createSupabaseServer();
-  const { data } = await supabase.auth.getUser();
-  return data.user ?? null;
-}
-
 /**
- * NEW: Use this when a page needs BOTH:
- * - an authenticated user
- * - an active subscription
- * - and also needs a server-side supabase client for querying
- *
- * Returns: { supabase, user, profile }
+ * Use this on server pages that require an active subscription AND need a server supabase client.
  */
 export async function requireActiveUser() {
   const supabase = await createSupabaseServer();
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const { data } = await supabase.auth.getUser();
+  const user = data.user;
 
   if (!user) redirect("/login");
 
-  const { data: profile, error } = await supabase
+  const { data: profile } = await supabase
     .from("profiles")
-    .select(
-      "id,email,full_name,account_type,subscription_status,stripe_customer_id,stripe_subscription_id,current_period_end"
-    )
+    .select("id,subscription_status")
     .eq("id", user.id)
     .maybeSingle();
 
-  if (error) {
-    console.error("requireActiveUser: profile lookup error:", error);
-    redirect("/login");
-  }
-
-  if (!profile) redirect("/login");
-
   const active =
-    profile.subscription_status === "active" ||
-    profile.subscription_status === "trialing";
+    profile?.subscription_status === "active" ||
+    profile?.subscription_status === "trialing";
 
   if (!active) redirect("/pricing");
 

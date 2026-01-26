@@ -14,11 +14,11 @@ function isUuid(v: string) {
 async function submitQuote(formData: FormData) {
   "use server";
 
-  const listingKey = String(formData.get("listingKey") || ""); // slug or id
-  const name = String(formData.get("name") || "");
-  const email = String(formData.get("email") || "");
-  const phone = String(formData.get("phone") || "");
-  const message = String(formData.get("message") || "");
+  const listingKey = String(formData.get("listingKey") || "").trim(); // slug or id
+  const name = String(formData.get("name") || "").trim();
+  const email = String(formData.get("email") || "").trim();
+  const phone = String(formData.get("phone") || "").trim();
+  const message = String(formData.get("message") || "").trim();
 
   if (!listingKey || !name || !email || !message) return;
 
@@ -55,10 +55,28 @@ async function submitQuote(formData: FormData) {
 
 export default async function ListingPage({ params }: { params: { slug: string } }) {
   const supabase = await createSupabaseServer();
-  const value = decodeURIComponent(params.slug || "").trim();
+  const value = decodeURIComponent((params?.slug ?? "")).trim();
 
-  // 1) Try published (what you want)
-  const base = supabase.from("listings").select("*").limit(1);
+  // If slug is empty, you are NOT on /listing/[slug]
+  if (!value) {
+    return (
+      <>
+        <Nav />
+        <main className="mx-auto max-w-4xl px-6 py-12">
+          <Card>
+            <h1 className="text-xl font-semibold">Listing not found</h1>
+            <p className="mt-2 text-slate-300">Missing listing slug in URL.</p>
+          </Card>
+        </main>
+      </>
+    );
+  }
+
+  // Select explicit columns (avoid select("*") while you’re debugging RLS/visibility)
+  const selectCols =
+    "id,slug,business_name,category,city,county,state,service_area,headline,description,phone,website,email_public,account_type,logo_url,cover_url,is_published";
+
+  const base = supabase.from("listings").select(selectCols).limit(1);
 
   const publishedRes = isUuid(value)
     ? await base.eq("id", value).eq("is_published", true).maybeSingle()
@@ -67,12 +85,11 @@ export default async function ListingPage({ params }: { params: { slug: string }
   const listing = publishedRes.data ?? null;
   const listingError = publishedRes.error ?? null;
 
-  // 2) If not found, try without published filter to diagnose
   const diagRes =
     !listing
       ? isUuid(value)
-        ? await supabase.from("listings").select("id, slug, is_published, business_name").eq("id", value).maybeSingle()
-        : await supabase.from("listings").select("id, slug, is_published, business_name").eq("slug", value).maybeSingle()
+        ? await supabase.from("listings").select("id,slug,is_published,business_name").eq("id", value).maybeSingle()
+        : await supabase.from("listings").select("id,slug,is_published,business_name").eq("slug", value).maybeSingle()
       : null;
 
   if (!listing) {
@@ -84,12 +101,17 @@ export default async function ListingPage({ params }: { params: { slug: string }
             <h1 className="text-xl font-semibold">Listing not found</h1>
             <p className="mt-2 text-slate-300">This listing may be unpublished or removed.</p>
 
-            {/* DEBUG PANEL (leave this in until fixed) */}
+            {/* DEBUG PANEL */}
             <div className="mt-6 rounded-lg border border-slate-800 bg-slate-950 p-4 text-sm text-slate-200">
               <div className="font-semibold text-slate-100">Debug</div>
+
               <div className="mt-2">
-                <div><span className="text-slate-400">param:</span> {params.slug}</div>
-                <div><span className="text-slate-400">decoded:</span> {value}</div>
+                <div>
+                  <span className="text-slate-400">param:</span> {params?.slug ?? "(missing)"}
+                </div>
+                <div>
+                  <span className="text-slate-400">decoded:</span> {value || "(empty)"}
+                </div>
               </div>
 
               <div className="mt-4">
