@@ -20,7 +20,9 @@ export async function getProfile() {
   const supabase = await createSupabaseServer();
   const { data } = await supabase
     .from("profiles")
-    .select("id,email,full_name,account_type,subscription_status,stripe_customer_id,stripe_subscription_id,current_period_end")
+    .select(
+      "id,email,full_name,account_type,subscription_status,stripe_customer_id,stripe_subscription_id,current_period_end"
+    )
     .eq("id", user.id)
     .maybeSingle();
 
@@ -31,7 +33,10 @@ export async function requireActiveSubscription() {
   const profile = await getProfile();
   if (!profile) redirect("/login");
 
-  const active = profile.subscription_status === "active" || profile.subscription_status === "trialing";
+  const active =
+    profile.subscription_status === "active" ||
+    profile.subscription_status === "trialing";
+
   if (!active) redirect("/pricing");
   return profile;
 }
@@ -40,4 +45,45 @@ export async function requireUserOptional() {
   const supabase = await createSupabaseServer();
   const { data } = await supabase.auth.getUser();
   return data.user ?? null;
+}
+
+/**
+ * NEW: Use this when a page needs BOTH:
+ * - an authenticated user
+ * - an active subscription
+ * - and also needs a server-side supabase client for querying
+ *
+ * Returns: { supabase, user, profile }
+ */
+export async function requireActiveUser() {
+  const supabase = await createSupabaseServer();
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) redirect("/login");
+
+  const { data: profile, error } = await supabase
+    .from("profiles")
+    .select(
+      "id,email,full_name,account_type,subscription_status,stripe_customer_id,stripe_subscription_id,current_period_end"
+    )
+    .eq("id", user.id)
+    .maybeSingle();
+
+  if (error) {
+    console.error("requireActiveUser: profile lookup error:", error);
+    redirect("/login");
+  }
+
+  if (!profile) redirect("/login");
+
+  const active =
+    profile.subscription_status === "active" ||
+    profile.subscription_status === "trialing";
+
+  if (!active) redirect("/pricing");
+
+  return { supabase, user, profile };
 }
