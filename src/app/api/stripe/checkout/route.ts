@@ -97,12 +97,7 @@ export async function POST(req: Request) {
 
     // Optional: mark pending so UI can show "processing" until webhook flips to active
     // (safe if column exists; remove if you don't want it)
-    try {
-      await supabaseAdmin
-        .from("profiles")
-        .update({ subscription_status: "pending" })
-        .eq("id", userId);
-    } catch {
+
       // ignore if column/enum blocks it
     }
 
