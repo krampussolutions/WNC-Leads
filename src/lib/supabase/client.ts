@@ -1,5 +1,3 @@
-"use client";
-
 import { createBrowserClient } from "@supabase/ssr";
 
 export function createSupabaseBrowser() {
@@ -8,5 +6,5 @@ export function createSupabaseBrowser() {
   return createBrowserClient(url, anon);
 }
 
-// Backward-compat alias (in case some files import the old name)
+// Optional compatibility alias:
 export const createSupabaseClient = createSupabaseBrowser;

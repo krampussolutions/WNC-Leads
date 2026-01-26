@@ -1,15 +1,25 @@
 import Nav from "@/components/Nav";
 import { Card } from "@/components/Card";
 import { requireActiveUser } from "@/lib/auth";
-import LeadsUI from "./ui";
+import LeadsClient from "./ui";
 
 export const dynamic = "force-dynamic";
 
 export default async function LeadsPage() {
+  // Server-only: redirects if not logged in / not active
   const { supabase, user } = await requireActiveUser();
 
-  // fetch any server-side initial data here if you want
-  // const { data } = await supabase.from("...").select("*");
+  // Server fetch initial leads (recommended so the page renders immediately)
+  const { data: leads, error } = await supabase
+    .from("quote_requests")
+    .select(
+      "id, requester_name, requester_email, requester_phone, message, status, created_at, read_at"
+    )
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    console.error("LeadsPage fetch error:", error);
+  }
 
   return (
     <>
@@ -21,8 +31,7 @@ export default async function LeadsPage() {
         </Card>
 
         <div className="mt-6">
-          {/* LeadsUI can be a "use client" component */}
-          <LeadsUI userId={user.id} />
+          <LeadsClient initialLeads={(leads ?? []) as any} />
         </div>
       </main>
     </>
