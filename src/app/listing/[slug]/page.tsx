@@ -1,6 +1,5 @@
 import Nav from "@/components/Nav";
 import { createSupabaseServer } from "@/lib/supabase/server";
-import { createSupabaseClient } from "@/lib/supabase/client";
 import { Card } from "@/components/Card";
 import { Button } from "@/components/Button";
 import { revalidatePath } from "next/cache";
@@ -15,7 +14,7 @@ function isUuid(v: string) {
 async function submitQuote(formData: FormData) {
   "use server";
 
-  const listingKey = String(formData.get("listingKey") || ""); // can be slug or id
+  const listingKey = String(formData.get("listingKey") || ""); // slug or id
   const name = String(formData.get("name") || "");
   const email = String(formData.get("email") || "");
   const phone = String(formData.get("phone") || "");
@@ -23,24 +22,21 @@ async function submitQuote(formData: FormData) {
 
   if (!listingKey || !name || !email || !message) return;
 
-  // Server (cookie) client is fine here since this is a server action
   const supabase = await createSupabaseServer();
 
-  // First, resolve listing by slug OR id, but only if published
   const base = supabase.from("listings").select("id, slug").limit(1);
 
-  const { data: listing, error: listingErr } = isUuid(listingKey)
+  const { data: listing, error } = isUuid(listingKey)
     ? await base.eq("id", listingKey).eq("is_published", true).maybeSingle()
     : await base.eq("slug", listingKey).eq("is_published", true).maybeSingle();
 
-  if (listingErr) {
-    console.error("submitQuote listing lookup error:", listingErr);
+  if (error) {
+    console.error("submitQuote listing lookup error:", error);
     return;
   }
-
   if (!listing) return;
 
-  const { error: insertErr } = await supabase.from("quote_requests").insert({
+  const { error: insertError } = await supabase.from("quote_requests").insert({
     listing_id: listing.id,
     requester_name: name,
     requester_email: email,
@@ -48,32 +44,36 @@ async function submitQuote(formData: FormData) {
     message,
   });
 
-  if (insertErr) {
-    console.error("submitQuote insert error:", insertErr);
+  if (insertError) {
+    console.error("submitQuote insert error:", insertError);
     return;
   }
 
-  // Revalidate canonical route
   const canonical = listing.slug ? `/listing/${listing.slug}` : `/listing/${listing.id}`;
   revalidatePath(canonical);
 }
 
 export default async function ListingPage({ params }: { params: { slug: string } }) {
-  // IMPORTANT: Use PUBLIC anon client for public reads
-  // This is what makes your published listing visible on the public page.
-  const supabase = createSupabaseClient();
+  const supabase = await createSupabaseServer();
+  const value = decodeURIComponent(params.slug || "").trim();
 
-  const value = decodeURIComponent(params.slug);
-
+  // 1) Try published (what you want)
   const base = supabase.from("listings").select("*").limit(1);
 
-  const { data: listing, error } = isUuid(value)
+  const publishedRes = isUuid(value)
     ? await base.eq("id", value).eq("is_published", true).maybeSingle()
     : await base.eq("slug", value).eq("is_published", true).maybeSingle();
 
-  if (error) {
-    console.error("ListingPage listing lookup error:", error);
-  }
+  const listing = publishedRes.data ?? null;
+  const listingError = publishedRes.error ?? null;
+
+  // 2) If not found, try without published filter to diagnose
+  const diagRes =
+    !listing
+      ? isUuid(value)
+        ? await supabase.from("listings").select("id, slug, is_published, business_name").eq("id", value).maybeSingle()
+        : await supabase.from("listings").select("id, slug, is_published, business_name").eq("slug", value).maybeSingle()
+      : null;
 
   if (!listing) {
     return (
@@ -83,6 +83,27 @@ export default async function ListingPage({ params }: { params: { slug: string }
           <Card>
             <h1 className="text-xl font-semibold">Listing not found</h1>
             <p className="mt-2 text-slate-300">This listing may be unpublished or removed.</p>
+
+            {/* DEBUG PANEL (leave this in until fixed) */}
+            <div className="mt-6 rounded-lg border border-slate-800 bg-slate-950 p-4 text-sm text-slate-200">
+              <div className="font-semibold text-slate-100">Debug</div>
+              <div className="mt-2">
+                <div><span className="text-slate-400">param:</span> {params.slug}</div>
+                <div><span className="text-slate-400">decoded:</span> {value}</div>
+              </div>
+
+              <div className="mt-4">
+                <div className="text-slate-400">Published query error:</div>
+                <pre className="mt-1 whitespace-pre-wrap">{JSON.stringify(listingError, null, 2)}</pre>
+              </div>
+
+              <div className="mt-4">
+                <div className="text-slate-400">Row exists (without is_published filter):</div>
+                <pre className="mt-1 whitespace-pre-wrap">{JSON.stringify(diagRes?.data ?? null, null, 2)}</pre>
+                <div className="text-slate-400 mt-2">Diag error:</div>
+                <pre className="mt-1 whitespace-pre-wrap">{JSON.stringify(diagRes?.error ?? null, null, 2)}</pre>
+              </div>
+            </div>
           </Card>
         </main>
       </>
@@ -116,12 +137,10 @@ export default async function ListingPage({ params }: { params: { slug: string }
 
               <div className="min-w-0">
                 <h1 className="text-3xl font-semibold text-white">{listing.business_name}</h1>
-
                 <div className="mt-2 text-slate-300">
                   {listing.category}
                   {listing.account_type ? ` · ${listing.account_type}` : ""}
                 </div>
-
                 <div className="mt-2 text-slate-400">
                   {listing.city}, {listing.state}
                   {listing.county ? ` · ${listing.county} County` : ""} · {listing.service_area}
@@ -130,7 +149,6 @@ export default async function ListingPage({ params }: { params: { slug: string }
             </div>
 
             {listing.headline ? <p className="mt-4 text-slate-200">{listing.headline}</p> : null}
-
             {listing.description ? (
               <p className="mt-4 whitespace-pre-wrap text-slate-300">{listing.description}</p>
             ) : null}
@@ -141,7 +159,6 @@ export default async function ListingPage({ params }: { params: { slug: string }
                   <span className="text-slate-400">Phone:</span> {listing.phone}
                 </div>
               ) : null}
-
               {listing.website ? (
                 <div>
                   <span className="text-slate-400">Website:</span>{" "}
@@ -150,7 +167,6 @@ export default async function ListingPage({ params }: { params: { slug: string }
                   </a>
                 </div>
               ) : null}
-
               {listing.email_public ? (
                 <div>
                   <span className="text-slate-400">Email:</span> {listing.email_public}
@@ -166,7 +182,6 @@ export default async function ListingPage({ params }: { params: { slug: string }
             </p>
 
             <form action={submitQuote} className="mt-6 grid gap-4">
-              {/* can be slug or id */}
               <input type="hidden" name="listingKey" value={listing.slug || listing.id} />
 
               <div className="grid gap-4 md:grid-cols-2">
@@ -178,7 +193,6 @@ export default async function ListingPage({ params }: { params: { slug: string }
                     className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2"
                   />
                 </div>
-
                 <div>
                   <label className="text-sm text-slate-300">Email</label>
                   <input
@@ -217,8 +231,6 @@ export default async function ListingPage({ params }: { params: { slug: string }
           <Card>
             <h2 className="text-xl font-semibold">Reviews</h2>
             <p className="mt-1 text-sm text-slate-300">Reviews are visible after approval.</p>
-
-            {/* Only pass slug if you have it */}
             <ReviewsSection slug={listing.slug} />
           </Card>
         </div>
