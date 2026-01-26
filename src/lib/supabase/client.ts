@@ -5,3 +5,6 @@ export function createSupabaseClient() {
   const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
   return createBrowserClient(url, anon);
 }
+
+// Backwards-compatible alias (so existing imports don't break)
+export const createSupabaseBrowser = createSupabaseClient;
