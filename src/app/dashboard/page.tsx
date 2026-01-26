@@ -4,6 +4,8 @@ import { Card } from "@/components/Card";
 import { Button } from "@/components/Button";
 import { requireUser, getProfile } from "@/lib/auth";
 import { createSupabaseServer } from "@/lib/supabase/server";
+import ReviewsPanel from "./reviews-panel";
+
 
 export const dynamic = "force-dynamic";
 
