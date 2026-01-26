@@ -7,7 +7,8 @@ async function submitReview(formData: FormData) {
   "use server";
 
   const slug = String(formData.get("slug") || "");
-  const rating = Number(formData.get("rating") || 5);
+  const ratingRaw = Number(formData.get("rating") || 5);
+  const rating = Math.min(5, Math.max(1, Number.isFinite(ratingRaw) ? ratingRaw : 5));
   const title = String(formData.get("title") || "");
   const body = String(formData.get("body") || "");
   const reviewer_name = String(formData.get("reviewer_name") || "");
@@ -30,12 +31,12 @@ async function submitReview(formData: FormData) {
   // Insert review (pending by default)
   await supabase.from("reviews").insert({
     listing_id: listing.id,
-    rating: Math.min(5, Math.max(1, rating)),
+    rating,
     title: title || null,
     body,
     reviewer_name: reviewer_name || null,
     reviewer_email: reviewer_email || null,
-    approved: false,
+    is_approved: false, // ✅ FIX
   });
 
   revalidatePath(`/listing/${slug}`);
@@ -54,12 +55,12 @@ export default async function ReviewsSection({ slug }: { slug: string }) {
 
   if (!listing) return null;
 
-  // Public only sees approved (RLS enforces this too)
+  // Public only sees approved (RLS should enforce this too)
   const { data: approvedReviews } = await supabase
     .from("reviews")
     .select("id,rating,title,body,reviewer_name,created_at")
     .eq("listing_id", listing.id)
-    .eq("approved", true)
+    .eq("is_approved", true) // ✅ FIX
     .order("created_at", { ascending: false })
     .limit(50);
 
@@ -74,7 +75,9 @@ export default async function ReviewsSection({ slug }: { slug: string }) {
               <div className="flex items-center justify-between">
                 <div className="text-slate-200">
                   <span className="font-semibold">{r.reviewer_name || "Anonymous"}</span>
-                  <span className="ml-2 text-slate-400">• {new Date(r.created_at).toLocaleDateString()}</span>
+                  <span className="ml-2 text-slate-400">
+                    • {new Date(r.created_at).toLocaleDateString()}
+                  </span>
                 </div>
                 <div className="text-slate-200">⭐ {r.rating}/5</div>
               </div>
@@ -148,9 +151,7 @@ export default async function ReviewsSection({ slug }: { slug: string }) {
           Submit review
         </button>
 
-        <p className="mt-2 text-xs text-slate-400">
-          Reviews require approval before appearing publicly.
-        </p>
+        <p className="mt-2 text-xs text-slate-400">Reviews require approval before appearing publicly.</p>
       </form>
     </div>
   );
