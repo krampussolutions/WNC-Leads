@@ -6,20 +6,13 @@ import LeadsClient from "./ui";
 export const dynamic = "force-dynamic";
 
 export default async function LeadsPage() {
-  // Server-only: redirects if not logged in / not active
   const { supabase, user } = await requireActiveUser();
 
-  // Server fetch initial leads (recommended so the page renders immediately)
-  const { data: leads, error } = await supabase
+  // Fetch leads for ALL listings owned by this user
+  const { data: leads } = await supabase
     .from("quote_requests")
-    .select(
-      "id, requester_name, requester_email, requester_phone, message, status, created_at, read_at"
-    )
+    .select("id,requester_name,requester_email,requester_phone,message,status,created_at,read_at,listing_id")
     .order("created_at", { ascending: false });
-
-  if (error) {
-    console.error("LeadsPage fetch error:", error);
-  }
 
   return (
     <>
@@ -31,7 +24,7 @@ export default async function LeadsPage() {
         </Card>
 
         <div className="mt-6">
-          <LeadsClient initialLeads={(leads ?? []) as any} />
+          <LeadsClient initialLeads={(leads ?? []) as any} userId={user.id} />
         </div>
       </main>
     </>
