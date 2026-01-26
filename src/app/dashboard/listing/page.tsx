@@ -4,7 +4,6 @@ import { createSupabaseServer } from "@/lib/supabase/server";
 import { Card } from "@/components/Card";
 import { Button } from "@/components/Button";
 import { revalidatePath } from "next/cache";
-import ReviewsSection from "./reviews";
 
 export const dynamic = "force-dynamic";
 
