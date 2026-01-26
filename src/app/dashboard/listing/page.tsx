@@ -1,3 +1,4 @@
+// src/app/dashboard/listing/page.tsx
 import Nav from "@/components/Nav";
 import { requireUser, getProfile } from "@/lib/auth";
 import { createSupabaseServer } from "@/lib/supabase/server";
@@ -22,49 +23,73 @@ export default async function ListingEditorPage() {
   const profile = await getProfile();
 
   const supabase = await createSupabaseServer();
-  const { data: listing } = await supabase
+
+  const { data: listing, error: listingError } = await supabase
     .from("listings")
     .select("*")
     .eq("owner_id", user.id)
     .maybeSingle();
 
-  const active = profile?.subscription_status === "active" || profile?.subscription_status === "trialing";
+  if (listingError) {
+    // Optional: if you want to fail hard instead
+    console.error("listing fetch error:", listingError);
+  }
+
+  const active =
+    profile?.subscription_status === "active" ||
+    profile?.subscription_status === "trialing";
 
   async function saveListing(formData: FormData) {
     "use server";
 
-    const business_name = String(formData.get("business_name") || "");
-    const category = String(formData.get("category") || "");
-    const city = String(formData.get("city") || "");
-    const county = String(formData.get("county") || "");
-    const state = String(formData.get("state") || "NC");
-    const service_area = String(formData.get("service_area") || "");
-    const account_type = String(formData.get("account_type") || "contractor");
-    const headline = String(formData.get("headline") || "");
-    const description = String(formData.get("description") || "");
-    const phone = String(formData.get("phone") || "");
-    const website = String(formData.get("website") || "");
-    const email_public = String(formData.get("email_public") || "");
-    const logo_url = String(formData.get("logo_url") || "");
-    const cover_url = String(formData.get("cover_url") || "");
+    const business_name = String(formData.get("business_name") || "").trim();
+    const category = String(formData.get("category") || "").trim();
+    const city = String(formData.get("city") || "").trim();
+    const county = String(formData.get("county") || "").trim();
+    const state = String(formData.get("state") || "NC").trim();
+    const service_area = String(formData.get("service_area") || "").trim();
+    const account_type = String(formData.get("account_type") || "contractor").trim();
+    const headline = String(formData.get("headline") || "").trim();
+    const description = String(formData.get("description") || "").trim();
+    const phone = String(formData.get("phone") || "").trim();
+    const website = String(formData.get("website") || "").trim();
+    const email_public = String(formData.get("email_public") || "").trim();
+    const logo_url = String(formData.get("logo_url") || "").trim();
+    const cover_url = String(formData.get("cover_url") || "").trim();
+
+    // checkbox sends "on" when checked
     const publish = String(formData.get("publish") || "") === "on";
 
     const supabase = await createSupabaseServer();
-    const { data: auth } = await supabase.auth.getUser();
+    const { data: auth, error: authErr } = await supabase.auth.getUser();
+
+    if (authErr) {
+      console.error("auth.getUser error:", authErr);
+      redirect("/login");
+    }
     if (!auth.user) redirect("/login");
 
     const owner_id = auth.user.id;
 
-    const { data: p } = await supabase
+    // Double-check subscription on the server (do not trust client)
+    const { data: p, error: profErr } = await supabase
       .from("profiles")
       .select("subscription_status")
       .eq("id", owner_id)
       .maybeSingle();
 
-    const isActive = p?.subscription_status === "active" || p?.subscription_status === "trialing";
+    if (profErr) {
+      console.error("profile lookup error:", profErr);
+    }
+
+    const isActive =
+      p?.subscription_status === "active" ||
+      p?.subscription_status === "trialing";
+
     const slug = slugify(business_name || "business");
 
-    const payload: any = {
+    // Build payload
+    const payload = {
       owner_id,
       slug,
       business_name,
@@ -81,26 +106,43 @@ export default async function ListingEditorPage() {
       email_public: email_public || null,
       logo_url: logo_url || null,
       cover_url: cover_url || null,
+      // Only allow publish if active
       is_published: publish && isActive,
-    };
+    } as const;
 
-    if (publish && !isActive) payload.is_published = false;
-
-    const { data: existing } = await supabase
+    // Upsert by owner_id (your RLS already enforces owner_id = auth.uid())
+    const { data: existing, error: existingErr } = await supabase
       .from("listings")
       .select("id")
       .eq("owner_id", owner_id)
       .maybeSingle();
 
-    if (existing?.id) {
-      await supabase.from("listings").update(payload).eq("id", existing.id);
-    } else {
-      await supabase.from("listings").insert(payload);
+    if (existingErr) {
+      console.error("existing listing lookup error:", existingErr);
     }
 
+    if (existing?.id) {
+      const { error: updErr } = await supabase
+        .from("listings")
+        .update(payload)
+        .eq("id", existing.id);
+
+      if (updErr) console.error("listing update error:", updErr);
+    } else {
+      const { error: insErr } = await supabase
+        .from("listings")
+        .insert(payload);
+
+      if (insErr) console.error("listing insert error:", insErr);
+    }
+
+    // Revalidate the pages that may render listings
     revalidatePath("/dashboard");
     revalidatePath("/browse");
     revalidatePath("/");
+    // Also revalidate the public listing path if we have a slug
+    revalidatePath(`/listing/${slug}`);
+
     redirect("/dashboard");
   }
 
