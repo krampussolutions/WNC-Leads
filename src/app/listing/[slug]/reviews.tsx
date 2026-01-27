@@ -17,6 +17,8 @@ async function submitReview(formData: FormData) {
   if (!slug || !body) return;
 
   const supabase = await createSupabaseServer();
+  console.log("REVIEWS:", approvedReviews);
+
 
   // Find published listing
   const { data: listing } = await supabase
